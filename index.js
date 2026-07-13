@@ -30,24 +30,36 @@ const INVENTARIO_FILTROS = {
 // Ruta inicial para validar que la API está viva
 // ---------------------------------------------------
 app.get("/", (req, res) => {
-  res.send("API Inventarios Logística funcionando correctamente");
+  res.send("API Inventarios Producción funcionando correctamente");
 });
 
 // ---------------------------------------------------
-// Endpoint: ver almacenes existentes en PAL3 y PAL4
+// Endpoint: ver almacenes existentes en PAL3 y PAL4 (CORREGIDO PARA DATOS RECIENTES)
 // ---------------------------------------------------
 app.get("/inventario/almacenes", async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
     const result = await pool.request().query(`
+      WITH RegistrosRecientes AS (
+          SELECT
+              WERKS,
+              LGORT,
+              TRY_CONVERT(DECIMAL(18,3), [CLABS]) AS CLABS,
+              ROW_NUMBER() OVER(
+                  PARTITION BY WERKS, LGORT, MATNR, CHARG 
+                  ORDER BY ERSDA DESC
+              ) as fila
+          FROM MCHB
+          WHERE LTRIM(RTRIM(WERKS)) IN ('PAL3', 'PAL4')
+      )
       SELECT
           WERKS AS Centro,
           LGORT AS Almacen,
           COUNT(*) AS Registros,
-          SUM(TRY_CONVERT(DECIMAL(18,3), [CLABS])) AS CantidadTotal
-      FROM MCHB
-      WHERE LTRIM(RTRIM(WERKS)) IN ('PAL3', 'PAL4')
+          SUM(CLABS) AS CantidadTotal
+      FROM RegistrosRecientes
+      WHERE fila = 1
       GROUP BY
           WERKS,
           LGORT
@@ -65,7 +77,7 @@ app.get("/inventario/almacenes", async (req, res) => {
 });
 
 // ---------------------------------------------------
-// Endpoint final: inventario por centro, almacén, material y lote
+// Endpoint final: inventario por centro, almacén, material y lote (CORREGIDO)
 // Toma los centros y almacenes desde INVENTARIO_FILTROS
 // ---------------------------------------------------
 app.get("/inventario/lotes", async (req, res) => {
@@ -97,25 +109,37 @@ app.get("/inventario/lotes", async (req, res) => {
 
     const whereDinamico = condiciones.join(" OR ");
 
+    // Se usa CTE (RegistrosRecientes) para obtener solo el último registro por fecha ERSDA
     const result = await request.query(`
+      WITH RegistrosRecientes AS (
+          SELECT
+              WERKS AS Centro,
+              LGORT AS Almacen,
+              MATNR AS Material,
+              CHARG AS Lote,
+              TRY_CONVERT(DECIMAL(18,3), [CLABS]) AS CantidadReal,
+              ERSDA AS FechaActualizacion,
+              ROW_NUMBER() OVER(
+                  PARTITION BY WERKS, LGORT, MATNR, CHARG 
+                  ORDER BY ERSDA DESC
+              ) as fila
+          FROM MCHB
+          WHERE ${whereDinamico}
+      )
       SELECT
-          WERKS AS Centro,
-          LGORT AS Almacen,
-          MATNR AS Material,
-          CHARG AS Lote,
-          SUM(TRY_CONVERT(DECIMAL(18,3), [CLABS])) AS CantidadReal
-      FROM MCHB
-      WHERE ${whereDinamico}
-      GROUP BY
-          WERKS,
-          LGORT,
-          MATNR,
-          CHARG
+          Centro,
+          Almacen,
+          Material,
+          Lote,
+          CantidadReal,
+          FechaActualizacion
+      FROM RegistrosRecientes
+      WHERE fila = 1
       ORDER BY
-          WERKS,
-          LGORT,
-          MATNR,
-          CHARG;
+          Centro,
+          Almacen,
+          Material,
+          Lote;
     `);
 
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -129,5 +153,5 @@ app.get("/inventario/lotes", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
-  console.log(`API Inventarios Logística corriendo en puerto ${PORT}`);
+  console.log(`API Inventarios Producción corriendo en puerto ${PORT}`);
 });
